@@ -698,6 +698,9 @@ int Mavlink::mavlink_open_uart(int baud, const char *uart_name, struct termios *
 
 	} else {
 		_is_usb_uart = true;
+		/* USB has no baudrate, but use a magic number for 'fast' */
+		_baudrate = 2000000;
+		_rstatus.type = telemetry_status_s::TELEMETRY_STATUS_RADIO_TYPE_USB;
 	}
 
 #if defined (__PX4_LINUX) || defined (__PX4_DARWIN)
@@ -896,7 +899,11 @@ Mavlink::send_message(const uint8_t msgid, const void *msg, uint8_t component_ID
 			(tstatus.heartbeat_time == 0)) &&
 			msgid == MAVLINK_MSG_ID_HEARTBEAT) {
 
-			(void)sendto(_socket_fd, buf, packet_len, 0, (struct sockaddr *)&_bcast_addr, sizeof(_bcast_addr));
+			int bret = sendto(_socket_fd, buf, packet_len, 0, (struct sockaddr *)&_bcast_addr, sizeof(_bcast_addr));
+
+			if (bret <= 0) {
+				PX4_WARN("sending broadcast failed");
+			}
 		}
 
 	} else if (get_protocol() == TCP) {
@@ -974,7 +981,7 @@ void
 Mavlink::init_udp()
 {
 #if defined (__PX4_LINUX) || defined (__PX4_DARWIN)
-	PX4_INFO("Setting up UDP w/port %d\n",_network_port);
+	PX4_INFO("Setting up UDP w/port %d",_network_port);
 
 	memset((char *)&_myaddr, 0, sizeof(_myaddr));
 	_myaddr.sin_family = AF_INET;
@@ -982,12 +989,18 @@ Mavlink::init_udp()
 	_myaddr.sin_port = htons(_network_port);
 
 	if ((_socket_fd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-		PX4_WARN("create socket failed\n");
+		PX4_WARN("create socket failed");
+		return;
+	}
+
+	int broadcast_opt = 1;
+	if (setsockopt(_socket_fd, SOL_SOCKET, SO_BROADCAST, &broadcast_opt, sizeof(broadcast_opt)) < 0) {
+		PX4_WARN("setting broadcast permission failed");
 		return;
 	}
 
 	if (bind(_socket_fd, (struct sockaddr *)&_myaddr, sizeof(_myaddr)) < 0) {
-		PX4_WARN("bind failed\n");
+		PX4_WARN("bind failed");
 		return;
 	}
 
@@ -1219,7 +1232,7 @@ Mavlink::configure_stream_threadsafe(const char *stream_name, const float rate)
 			usleep(MAIN_LOOP_DELAY / 2);
 		} while (_subscribe_to_stream != nullptr);
 
-		delete s;
+		delete[] s;
 	}
 }
 
@@ -1510,6 +1523,9 @@ Mavlink::task_main(int argc, char *argv[])
 			} else if (strcmp(myoptarg, "osd") == 0) {
 				_mode = MAVLINK_MODE_OSD;
 
+			} else if (strcmp(myoptarg, "magic") == 0) {
+				_mode = MAVLINK_MODE_MAGIC;
+
 			} else if (strcmp(myoptarg, "config") == 0) {
 				_mode = MAVLINK_MODE_CONFIG;
 			}
@@ -1666,7 +1682,6 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("GPS_RAW_INT", 1.0f);
 		configure_stream("GLOBAL_POSITION_INT", 3.0f);
 		configure_stream("LOCAL_POSITION_NED", 3.0f);
-		configure_stream("NAMED_VALUE_FLOAT", 2.0f);
 		configure_stream("RC_CHANNELS", 1.0f);
 		configure_stream("SERVO_OUTPUT_RAW_0", 1.0f);
 		configure_stream("POSITION_TARGET_GLOBAL_INT", 3.0f);
@@ -1674,6 +1689,8 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("DISTANCE_SENSOR", 0.5f);
 		configure_stream("OPTICAL_FLOW_RAD", 5.0f);
 		configure_stream("EXTENDED_SYS_STATE", 1.0f);
+		configure_stream("ALTITUDE", 1.0f);
+		configure_stream("VISION_POSITION_NED", 10.0f);
 		break;
 
 	case MAVLINK_MODE_ONBOARD:
@@ -1697,9 +1714,11 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("SYSTEM_TIME", 1.0f);
 		configure_stream("TIMESYNC", 10.0f);
 		configure_stream("ACTUATOR_CONTROL_TARGET0", 10.0f);
-		/* camera trigger is rate limited at the source, do not limit here */
+		//camera trigger is rate limited at the source, do not limit here
 		configure_stream("CAMERA_TRIGGER", 500.0f);
 		configure_stream("EXTENDED_SYS_STATE", 2.0f);
+		configure_stream("ALTITUDE", 10.0f);
+		configure_stream("VISION_POSITION_NED", 10.0f);
 		break;
 
 	case MAVLINK_MODE_OSD:
@@ -1715,6 +1734,11 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("RC_CHANNELS", 5.0f);
 		configure_stream("SERVO_OUTPUT_RAW_0", 1.0f);
 		configure_stream("EXTENDED_SYS_STATE", 1.0f);
+		configure_stream("ALTITUDE", 1.0f);
+		break;
+
+	case MAVLINK_MODE_MAGIC:
+		//stream nothing
 		break;
 
 	case MAVLINK_MODE_CONFIG:
@@ -1731,7 +1755,7 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("VFR_HUD", 20.0f);
 		configure_stream("ATTITUDE", 100.0f);
 		configure_stream("ACTUATOR_CONTROL_TARGET0", 30.0f);
-		configure_stream("RC_CHANNELS", 5.0f);
+		configure_stream("RC_CHANNELS", 10.0f);
 		configure_stream("SERVO_OUTPUT_RAW_0", 20.0f);
 		configure_stream("SERVO_OUTPUT_RAW_1", 20.0f);
 		configure_stream("POSITION_TARGET_GLOBAL_INT", 10.0f);
@@ -1741,6 +1765,8 @@ Mavlink::task_main(int argc, char *argv[])
 		configure_stream("GPS_RAW_INT", 20.0f);
 		configure_stream("CAMERA_TRIGGER", 500.0f);
 		configure_stream("EXTENDED_SYS_STATE", 2.0f);
+		configure_stream("ALTITUDE", 10.0f);
+		configure_stream("VISION_POSITION_NED", 10.0f);
 
 	default:
 		break;
@@ -2085,8 +2111,12 @@ Mavlink::display_status()
 			printf("3DR RADIO\n");
 			break;
 
+		case telemetry_status_s::TELEMETRY_STATUS_RADIO_TYPE_USB:
+			printf("USB CDC\n");
+			break;
+
 		default:
-			printf("UNKNOWN RADIO\n");
+			printf("GENERIC LINK OR RADIO\n");
 			break;
 		}
 

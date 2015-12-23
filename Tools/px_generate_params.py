@@ -3,8 +3,8 @@ import xml.etree.ElementTree as ET
 import os
 
 if len(os.sys.argv) != 2:
-	print "Error in %s" % os.sys.argv[0]
-	print "Usage: %s <parameters.xml>"
+	print("Error in %s" % os.sys.argv[0])
+	print("Usage: %s <parameters.xml>" % os.sys.argv[0])
 	raise SystemExit
 
 fp_header = open("px4_parameters.h", "w")
@@ -29,7 +29,7 @@ start_name = ""
 end_name = ""
 
 for group in root:
-	if group.tag == "group":
+	if group.tag == "group" and "no_code_generation" not in group.attrib:
 		header += """
 	/*****************************************************************
 	 * %s
@@ -62,7 +62,8 @@ struct px4_parameters_t px4_parameters = {
 """
 i=0
 for group in root:
-	if group.tag == "group":
+	if group.tag == "group" and "no_code_generation" not in group.attrib:
+
 		src += """
 	/*****************************************************************
 	 * %s
